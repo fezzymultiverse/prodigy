@@ -6,6 +6,7 @@ build_signed_apk:
   image: mingc/android-build-box:latest
   script:
     - npm install
+    - npm install -g @capacitor/cli
     - npx cap add android
     - cd android && chmod +x gradlew
     - ./gradlew assembleRelease
@@ -14,7 +15,8 @@ build_signed_apk:
     - UNSIGNED=$(ls app/build/outputs/apk/release/*-unsigned.apk | head -1)
     - $BT/zipalign -p -f 4 "$UNSIGNED" aligned.apk
     - $BT/apksigner sign --ks my.keystore --ks-pass env:KEYSTORE_PASS --ks-key-alias "$KEY_ALIAS" --out signed-app.apk aligned.apk
-    - $BT/apksigner verify --verbose signed-app.apk
+    - mv signed-app.apk app/build/outputs/apk/release/
+    - $BT/apksigner verify --verbose app/build/outputs/apk/release/signed-app.apk
   artifacts:
     paths:
       - android/app/build/outputs/apk/release/signed-app.apk
