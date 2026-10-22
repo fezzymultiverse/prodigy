@@ -1,45 +1,20 @@
-# Prodigy Syncing: GitLab CI build (same steps as .github/workflows/build-apk.yml)
-build-apk:
+stages:
+  - build
+
+build_signed_apk:
+  stage: build
   image: mingc/android-build-box:latest
-  rules:
-    - if: '$CI_COMMIT_BRANCH == "main"'
   script:
-    - java -version
-    - node -v
-    - python3 scripts/lint.py
-    - |
-      VER=$(grep -o "const APPV='V[0-9]*'" www/index.html | grep -oE "V[0-9]+")
-      echo "{\"repo\":\"$CI_PROJECT_PATH\",\"run\":$CI_PIPELINE_IID,\"ver\":\"$VER\"}" > www/build.json
     - npm install
     - npx cap add android
-    # versionCode must be higher than your old GitHub builds so it installs as an update
-    - export VERSION_CODE=$((CI_PIPELINE_IID + 1000))
-    - bash scripts/patch-android.sh
-    - npx cap sync android
-    - |
-      if [ -n "$DEBUG_KEYSTORE_B64" ]; then
-        mkdir -p ~/.android && echo "$DEBUG_KEYSTORE_B64" | base64 -d > ~/.android/debug.keystore
-      fi
-    - |
-      cd android && chmod +x gradlew
-      if [ -n "$RELEASE_KEYSTORE_B64" ]; then
-        ./gradlew assembleRelease --no-daemon --stacktrace
-        cd ..
-        echo "$RELEASE_KEYSTORE_B64" | base64 -d > release.keystore
-        BT=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
-        UN=$(ls android/app/build/outputs/apk/release/*.apk | head -1)
-        "$BT/zipalign" -f -p 4 "$UN" aligned.apk
-        RKSP="$RELEASE_KEYSTORE_PASSWORD" RKP="$RELEASE_KEY_PASSWORD" "$BT/apksigner" sign --ks release.keystore --ks-key-alias "$RELEASE_KEY_ALIAS" --ks-pass env:RKSP --key-pass env:RKP --out prodigy.apk aligned.apk
-        rm -f release.keystore aligned.apk
-        echo "Signed with release key"
-      else
-        ./gradlew assembleDebug --no-daemon --stacktrace
-        cd ..
-        cp android/app/build/outputs/apk/debug/app-debug.apk prodigy.apk
-        echo "Signed with debug key"
-      fi
+    - cd android && chmod +x gradlew
+    - ./gradlew assembleRelease
+    - echo "$KEYSTORE_B64" | base64 -d > my.keystore
+    - BT=$(ls -d $ANDROID_HOME/build-tools/* | sort -V | tail -1)
+    - UNSIGNED=$(ls app/build/outputs/apk/release/*-unsigned.apk | head -1)
+    - $BT/zipalign -p -f 4 "$UNSIGNED" aligned.apk
+    - $BT/apksigner sign --ks my.keystore --ks-pass env:KEYSTORE_PASS --ks-key-alias "$KEY_ALIAS" --out signed-app.apk aligned.apk
+    - $BT/apksigner verify --verbose signed-app.apk
   artifacts:
-    name: prodigy-apk
     paths:
-      - prodigy.apk
-    expire_in: never
+      - android/app/build/outputs/apk/release/signed-app.apk
