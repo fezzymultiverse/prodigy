@@ -7,6 +7,7 @@ build_signed_apk:
   script:
     - npm install
     - npx cap add android
+    - bash scripts/patch-android.sh
     - cd android && chmod +x gradlew
     - ./gradlew assembleRelease
     - echo "$KEYSTORE_B64" | base64 -d > my.keystore
