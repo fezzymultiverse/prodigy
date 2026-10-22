@@ -1,0 +1,35 @@
+# dependencies and build output
+node_modules/
+android/
+www/android/
+*.apk
+*.aab
+*.keystore
+*.jks
+build/
+.gradle/
+local.properties
+
+# secrets: NEVER commit keys, tokens or vault exports
+.env
+.env.*
+*.pem
+*.key
+secrets.*
+*vault*.json
+*backup*.json
+
+# termux / editor / os junk
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+*.log
+*.tmp
+.vscode/
+.idea/
+
+# signing material never goes in the repo
+.prodigy-signing/
+release.env

@@ -1,0 +1,77 @@
+name: Build APK
+on:
+  push: {branches: [main]}
+  workflow_dispatch: {}
+permissions:
+  contents: write
+concurrency:
+  group: build-apk
+  cancel-in-progress: true
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: 20}
+      - uses: actions/setup-java@v4
+        with: {distribution: temurin, java-version: 17}
+      - name: Lint web app
+        run: python3 scripts/lint.py
+      - name: Stamp build info (the app reads this to check for updates)
+        run: |
+          VER=$(grep -o "const APPV='V[0-9]*'" www/index.html | grep -oE "V[0-9]+")
+          echo "{\"repo\":\"$GITHUB_REPOSITORY\",\"run\":$GITHUB_RUN_NUMBER,\"ver\":\"$VER\"}" > www/build.json
+          echo "VER=$VER" >> "$GITHUB_ENV"
+      - name: Install Capacitor
+        run: npm install
+      - name: Generate Android project
+        run: npx cap add android
+      - name: Patch native playback layer
+        run: bash scripts/patch-android.sh
+      - name: Sync web assets
+        run: npx cap sync android
+      - name: Fixed debug key (fallback, keeps updates installable)
+        env:
+          KS: ${{ secrets.DEBUG_KEYSTORE_B64 }}
+        run: |
+          if [ -n "$KS" ]; then mkdir -p ~/.android && echo "$KS" | base64 -d > ~/.android/debug.keystore; fi
+      - name: Build APK (release key if set, else debug key)
+        env:
+          RKS: ${{ secrets.RELEASE_KEYSTORE_B64 }}
+          RKSP: ${{ secrets.RELEASE_KEYSTORE_PASSWORD }}
+          RKA: ${{ secrets.RELEASE_KEY_ALIAS }}
+          RKP: ${{ secrets.RELEASE_KEY_PASSWORD }}
+          DKS: ${{ secrets.DEBUG_KEYSTORE_B64 }}
+        run: |
+          cd android && chmod +x gradlew
+          if [ -n "$RKS" ]; then
+            ./gradlew assembleRelease --no-daemon --stacktrace
+            cd ..
+            echo "$RKS" | base64 -d > release.keystore
+            BT=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
+            UN=$(ls android/app/build/outputs/apk/release/*.apk | head -1)
+            "$BT/zipalign" -f -p 4 "$UN" aligned.apk
+            "$BT/apksigner" sign --ks release.keystore --ks-key-alias "$RKA" --ks-pass env:RKSP --key-pass env:RKP --out prodigy.apk aligned.apk
+            "$BT/apksigner" verify --print-certs prodigy.apk
+            rm -f release.keystore aligned.apk
+            echo "SIGNED=release key" >> "$GITHUB_ENV"
+          else
+            ./gradlew assembleDebug --no-daemon --stacktrace
+            cd ..
+            cp android/app/build/outputs/apk/debug/app-debug.apk prodigy.apk
+            if [ -n "$DKS" ]; then echo "SIGNED=fixed debug key" >> "$GITHUB_ENV"; else echo "SIGNED=random debug key (run scripts/setup-signing.sh)" >> "$GITHUB_ENV"; echo "::warning::No signing secrets: every build gets a new key and will NOT install over the old one. Run scripts/setup-signing.sh in Termux once."; fi
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: prodigy-apk
+          path: prodigy.apk
+      - name: Publish GitHub Release (the app's update check reads this)
+        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.VER }}-b${{ github.run_number }}
+          name: Prodigy Syncing ${{ env.VER }} (build ${{ github.run_number }})
+          body: "Signed with: ${{ env.SIGNED }}. Install over the old app to update in place."
+          files: prodigy.apk
+          make_latest: true

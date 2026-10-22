@@ -1,0 +1,20 @@
+stages:
+  - build
+
+build_signed_apk:
+  stage: build
+  image: mingc/android-build-box:latest
+  script:
+    - npm install
+    - npx cap add android
+    - cd android && chmod +x gradlew
+    - ./gradlew assembleRelease
+    - echo "$KEYSTORE_B64" | base64 -d > my.keystore
+    - BT=$(ls -d $ANDROID_HOME/build-tools/* | sort -V | tail -1)
+    - UNSIGNED=$(ls app/build/outputs/apk/release/*-unsigned.apk | head -1)
+    - $BT/zipalign -p -f 4 "$UNSIGNED" aligned.apk
+    - $BT/apksigner sign --ks my.keystore --ks-pass env:KEYSTORE_PASS --ks-key-alias "$KEY_ALIAS" --out signed-app.apk aligned.apk
+    - $BT/apksigner verify --verbose signed-app.apk
+  artifacts:
+    paths:
+      - android/app/build/outputs/apk/release/signed-app.apk

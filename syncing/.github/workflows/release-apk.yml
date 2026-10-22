@@ -1,0 +1,42 @@
+name: Release APK + AAB (signed)
+on:
+  workflow_dispatch: {}
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: 20}
+      - uses: actions/setup-java@v4
+        with: {distribution: temurin, java-version: 17}
+      - run: python3 scripts/lint.py
+      - run: npm install
+      - run: npx cap add android
+      - run: bash scripts/patch-android.sh
+      - run: npx cap sync android
+      - name: Build unsigned release
+        run: cd android && chmod +x gradlew && ./gradlew assembleRelease bundleRelease --no-daemon --stacktrace
+      - name: Sign with your release key
+        env:
+          KS: ${{ secrets.RELEASE_KEYSTORE_B64 }}
+          KSP: ${{ secrets.RELEASE_KEYSTORE_PASSWORD }}
+          KA: ${{ secrets.RELEASE_KEY_ALIAS }}
+          KP: ${{ secrets.RELEASE_KEY_PASSWORD }}
+        run: |
+          [ -n "$KS" ] || { echo "::error::Add the RELEASE_KEYSTORE_* secrets first (see README, Install without warnings)"; exit 1; }
+          echo "$KS" | base64 -d > release.keystore
+          BT=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
+          UN=$(ls android/app/build/outputs/apk/release/*.apk | head -1)
+          "$BT/zipalign" -f -p 4 "$UN" aligned.apk
+          "$BT/apksigner" sign --ks release.keystore --ks-key-alias "$KA" --ks-pass env:KSP --key-pass env:KP --out prodigy-release.apk aligned.apk
+          "$BT/apksigner" verify prodigy-release.apk
+          cp android/app/build/outputs/bundle/release/app-release.aab prodigy-release.aab
+          jarsigner -keystore release.keystore -storepass "$KSP" -keypass "$KP" prodigy-release.aab "$KA"
+          rm -f release.keystore
+      - uses: actions/upload-artifact@v4
+        with:
+          name: prodigy-release
+          path: |
+            prodigy-release.apk
+            prodigy-release.aab
