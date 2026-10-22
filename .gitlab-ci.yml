@@ -6,8 +6,8 @@ build_signed_apk:
   image: mingc/android-build-box:latest
   script:
     - npm install
+    - npm install -g @capacitor/cli
     - npx cap add android
-    - bash scripts/patch-android.sh
     - cd android && chmod +x gradlew
     - ./gradlew assembleRelease
     - echo "$KEYSTORE_B64" | base64 -d > my.keystore
