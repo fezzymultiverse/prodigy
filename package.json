@@ -1,0 +1,1 @@
+{"name":"syncing","version":"90.0.0","private":true,"license":"GPL-3.0-or-later","author":"Grant Festers (philfesters)","description":"Prodigy Syncing · S.O.I / Bojack Security","dependencies":{"@capacitor/android":"^6.2.0","@capacitor/cli":"^6.2.0","@capacitor/core":"^6.2.0"}}

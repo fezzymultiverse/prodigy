@@ -1,0 +1,51 @@
+name: NewPipe auto-update
+# Every Monday: look up the newest NewPipeExtractor, build the APK with it, and only if the build
+# passes commit the new version to scripts/newpipe.version. A broken release never reaches main.
+on:
+  schedule: [{cron: '17 3 * * 1'}]
+  workflow_dispatch: {}
+permissions:
+  contents: write
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Newest NewPipeExtractor
+        id: v
+        env: {GH_TOKEN: '${{ github.token }}'}
+        run: |
+          NEW=$(gh api repos/TeamNewPipe/NewPipeExtractor/releases/latest --jq .tag_name)
+          OLD=$(tr -d '[:space:]' < scripts/newpipe.version)
+          echo "installed $OLD, newest $NEW"
+          echo "new=$NEW" >> "$GITHUB_OUTPUT"; echo "old=$OLD" >> "$GITHUB_OUTPUT"
+          if [ -n "$NEW" ] && [ "$NEW" != "$OLD" ]; then echo "changed=true" >> "$GITHUB_OUTPUT"; fi
+      - if: steps.v.outputs.changed == 'true'
+        uses: actions/setup-node@v4
+        with: {node-version: 20}
+      - if: steps.v.outputs.changed == 'true'
+        uses: actions/setup-java@v4
+        with: {distribution: temurin, java-version: 17}
+      - name: Build with the new version
+        if: steps.v.outputs.changed == 'true'
+        env: {NEWPIPE_VERSION: '${{ steps.v.outputs.new }}'}
+        run: |
+          python3 scripts/lint.py
+          npm install
+          npx cap add android
+          bash scripts/patch-android.sh
+          npx cap sync android
+          cd android && chmod +x gradlew && ./gradlew assembleDebug --no-daemon --stacktrace
+      - name: Keep the new version
+        if: steps.v.outputs.changed == 'true'
+        run: |
+          echo "${{ steps.v.outputs.new }}" > scripts/newpipe.version
+          git config user.name "bojack-bot"; git config user.email "bojack-bot@users.noreply.github.com"
+          git add scripts/newpipe.version
+          git commit -m "NewPipeExtractor ${{ steps.v.outputs.old }} -> ${{ steps.v.outputs.new }} (auto, build verified)"
+          git push
+      - if: steps.v.outputs.changed == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: prodigy-debug-apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk
