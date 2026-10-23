@@ -38,13 +38,11 @@ jobs:
       - name: Sync Capacitor
         run: npx cap sync android
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
 
       - name: Install SDK packages
         run: |
-          yes | sdkmanager --licenses
-          sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0"
+          SM="$(find "$ANDROID_HOME/cmdline-tools" -name sdkmanager | head -1)"; yes | "$SM" --licenses || true
+          "$SM" "platform-tools" "platforms;android-34" "build-tools;34.0.0"
 
       - name: Decode Keystore
         env:
