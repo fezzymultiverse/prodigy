@@ -1,0 +1,53 @@
+name: Build Signed APK
+
+on:
+  push:
+    branches: [ "main" ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: set up JDK 17
+      uses: actions/setup-java@v4
+      with:
+        java-version: '17'
+        distribution: 'temurin'
+
+    - name: Install Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '22'
+
+    - name: Install dependencies
+      run: |
+        npm install
+        npm install -g @capacitor/cli
+
+    - name: Build Android
+      run: |
+        npx cap add android
+        cd android
+        chmod +x gradlew
+        ./gradlew assembleRelease
+
+    - name: Sign APK
+      run: |
+        echo "$KEYSTORE_B64" | base64 -d > my.keystore
+        BT_DIR="$ANDROID_HOME/build-tools/$(ls $ANDROID_HOME/build-tools/ | sort -V | tail -1)"
+        UNSIGNED=$(ls android/app/build/outputs/apk/release/*-unsigned.apk | head -1)
+        "$BT_DIR/zipalign" -p -f 4 "$UNSIGNED" aligned.apk
+        "$BT_DIR/apksigner" sign --ks my.keystore --ks-pass env:KEYSTORE_PASS --ks-key-alias "$KEY_ALIAS" --out signed-app.apk aligned.apk
+      env:
+        KEYSTORE_B64: ${{ secrets.KEYSTORE_B64 }}
+        KEYSTORE_PASS: ${{ secrets.KEYSTORE_PASS }}
+        KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+
+    - name: Upload APK
+      uses: actions/upload-artifact@v4
+      with:
+        name: signed-app
+        path: signed-app.apk
