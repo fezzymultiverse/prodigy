@@ -10,15 +10,6 @@ jobs:
   build:
     runs-on: ubuntu-latest
 
-    env:
-      JAVA_VERSION: '17'
-      ANDROID_SDK_ROOT: ${{ github.workspace }}/android-sdk
-      ANDROID_HOME: ${{ github.workspace }}/android-sdk
-      KEYSTORE_PATH: ${{ github.workspace }}/android/app/release.jks
-      KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-      KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-      KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
@@ -28,86 +19,78 @@ jobs:
         with:
           node-version: '20'
 
+      - name: Install dependencies
+        run: npm install
+
       - name: Set up Java
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: ${{ env.JAVA_VERSION }}
-
-      - name: Install project dependencies
-        run: npm install
+          java-version: '17'
 
       - name: Add Android platform
         run: |
           npx cap add android || true
           test -d android
 
-      - name: Sync Capacitor to Android
+      - name: Sync Capacitor
         run: npx cap sync android
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Install Android SDK packages
+      - name: Install SDK packages
         run: |
           yes | sdkmanager --licenses
           sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0"
 
-      - name: Decode release keystore
-        if: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
+      - name: Decode Keystore
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
         run: |
-          mkdir -p android/app
-          echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 --decode > "$KEYSTORE_PATH"
+          echo "$KEYSTORE_BASE64" | base64 --decode > android/app/release.keystore
 
-      - name: Configure release signing for Gradle
-        if: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
+      - name: Configure Signing in build.gradle
         run: |
           python3 - <<'PY'
           from pathlib import Path
           p = Path('android/app/build.gradle')
           text = p.read_text()
-
+          
           if 'signingConfigs' not in text:
               text = text.replace(
                   "    buildTypes {\n",
                   """    signingConfigs {
         release {
-            keyAlias System.getenv(\"KEY_ALIAS\")
-            keyPassword System.getenv(\"KEY_PASSWORD\")
-            storeFile file(System.getenv(\"KEYSTORE_PATH\"))
-            storePassword System.getenv(\"KEYSTORE_PASSWORD\")
+            storeFile file("release.keystore")
+            storePassword System.getenv("KEYSTORE_PASS")
+            keyAlias System.getenv("KEY_ALIAS")
+            keyPassword System.getenv("KEYSTORE_PASS")
         }
     }
-
     buildTypes {
 """,
                   1,
               )
-
+          
           if 'signingConfig signingConfigs.release' not in text:
               text = text.replace(
                   "        release {\n",
                   "        release {\n            signingConfig signingConfigs.release\n",
                   1,
               )
-
           p.write_text(text)
           PY
 
       - name: Build signed release APK
-        if: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
+        env:
+          KEYSTORE_PASS: ${{ secrets.KEYSTORE_PASS }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
         working-directory: android
         run: ./gradlew assembleRelease
 
-      - name: Build debug APK fallback
-        if: ${{ secrets.ANDROID_KEYSTORE_BASE64 == '' }}
-        working-directory: android
-        run: ./gradlew assembleDebug
-
-      - name: Upload APK artifact
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: android-apk
-          path: |
-            android/app/build/outputs/apk/release/app-release.apk
-            android/app/build/outputs/apk/debug/app-debug.apk
+          name: signed-app
+          path: android/app/build/outputs/apk/release/app-release.apk
