@@ -6,10 +6,12 @@ on:
     branches:
       - main
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
@@ -48,7 +50,13 @@ jobs:
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
         run: |
+          test -n "$KEYSTORE_BASE64"
           echo "$KEYSTORE_BASE64" | base64 --decode > android/app/release.keystore
+
+      - name: Bump versionCode
+        run: |
+          sed -i "/defaultConfig {/,/}/s/versionCode [0-9]*/versionCode ${{ github.run_number }}/" android/app/build.gradle
+          sed -i "/defaultConfig {/,/}/s/versionName \"[^\"]*\"/versionName \"1.0.${{ github.run_number }}\"/" android/app/build.gradle
 
       - name: Configure Signing in build.gradle
         run: |
@@ -56,23 +64,21 @@ jobs:
           from pathlib import Path
           p = Path('android/app/build.gradle')
           text = p.read_text()
-          
           if 'signingConfigs' not in text:
               text = text.replace(
                   "    buildTypes {\n",
                   """    signingConfigs {
-        release {
-            storeFile file("release.keystore")
-            storePassword System.getenv("KEYSTORE_PASS")
-            keyAlias System.getenv("KEY_ALIAS")
-            keyPassword System.getenv("KEYSTORE_PASS")
-        }
-    }
-    buildTypes {
-""",
+              release {
+                  storeFile file("release.keystore")
+                  storePassword System.getenv("KEYSTORE_PASS")
+                  keyAlias System.getenv("KEY_ALIAS")
+                  keyPassword System.getenv("KEYSTORE_PASS")
+              }
+          }
+          buildTypes {
+          """,
                   1,
               )
-          
           if 'signingConfig signingConfigs.release' not in text:
               text = text.replace(
                   "        release {\n",
@@ -84,13 +90,21 @@ jobs:
 
       - name: Build signed release APK
         env:
-          KEYSTORE_PASS: ${{ secrets.KEYSTORE_PASS }}
+          KEYSTORE_PASS: ${{ secrets.KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
         working-directory: android
         run: ./gradlew assembleRelease
 
-      - name: Upload APK
+      - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: signed-app
           path: android/app/build/outputs/apk/release/app-release.apk
+
+      - name: Publish GitHub Release (for Obtainium)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp android/app/build/outputs/apk/release/app-release.apk "${{ github.event.repository.name }}.apk"
+          gh release create "V${{ github.run_number }}" "${{ github.event.repository.name }}.apk" \
+            --title "V${{ github.run_number }}" --notes "Signed build ${{ github.sha }}"
