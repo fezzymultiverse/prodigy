@@ -1,53 +1,113 @@
-name: Build Signed APK
+name: Android APK Build
 
 on:
+  workflow_dispatch:
   push:
-    branches: [ "main" ]
+    branches:
+      - main
 
 jobs:
   build:
     runs-on: ubuntu-latest
 
+    env:
+      JAVA_VERSION: '17'
+      ANDROID_SDK_ROOT: ${{ github.workspace }}/android-sdk
+      ANDROID_HOME: ${{ github.workspace }}/android-sdk
+      KEYSTORE_PATH: ${{ github.workspace }}/android/app/release.jks
+      KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+      KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+      KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+
     steps:
-    - uses: actions/checkout@v4
+      - name: Checkout repo
+        uses: actions/checkout@v4
 
-    - name: set up JDK 17
-      uses: actions/setup-java@v4
-      with:
-        java-version: '17'
-        distribution: 'temurin'
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
 
-    - name: Install Node.js
-      uses: actions/setup-node@v4
-      with:
-        node-version: '22'
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
 
-    - name: Install dependencies
-      run: |
-        npm install
-        npm install -g @capacitor/cli
+      - name: Install project dependencies
+        run: npm install
 
-    - name: Build Android
-      run: |
-        npx cap add android
-        cd android
-        chmod +x gradlew
-        ./gradlew assembleRelease
+      - name: Add Android platform
+        run: |
+          npx cap add android || true
+          test -d android
 
-    - name: Sign APK
-      run: |
-        echo "$KEYSTORE_B64" | base64 -d > my.keystore
-        BT_DIR="$ANDROID_HOME/build-tools/$(ls $ANDROID_HOME/build-tools/ | sort -V | tail -1)"
-        UNSIGNED=$(ls android/app/build/outputs/apk/release/*-unsigned.apk | head -1)
-        "$BT_DIR/zipalign" -p -f 4 "$UNSIGNED" aligned.apk
-        "$BT_DIR/apksigner" sign --ks my.keystore --ks-pass env:KEYSTORE_PASS --ks-key-alias "$KEY_ALIAS" --out signed-app.apk aligned.apk
-      env:
-        KEYSTORE_B64: ${{ secrets.KEYSTORE_B64 }}
-        KEYSTORE_PASS: ${{ secrets.KEYSTORE_PASS }}
-        KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+      - name: Sync Capacitor to Android
+        run: npx cap sync android
 
-    - name: Upload APK
-      uses: actions/upload-artifact@v4
-      with:
-        name: signed-app
-        path: signed-app.apk
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK packages
+        run: |
+          yes | sdkmanager --licenses
+          sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0"
+
+      - name: Decode release keystore
+        if: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
+        run: |
+          mkdir -p android/app
+          echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 --decode > "$KEYSTORE_PATH"
+
+      - name: Configure release signing for Gradle
+        if: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('android/app/build.gradle')
+          text = p.read_text()
+
+          if 'signingConfigs' not in text:
+              text = text.replace(
+                  "    buildTypes {\n",
+                  """    signingConfigs {
+        release {
+            keyAlias System.getenv(\"KEY_ALIAS\")
+            keyPassword System.getenv(\"KEY_PASSWORD\")
+            storeFile file(System.getenv(\"KEYSTORE_PATH\"))
+            storePassword System.getenv(\"KEYSTORE_PASSWORD\")
+        }
+    }
+
+    buildTypes {
+""",
+                  1,
+              )
+
+          if 'signingConfig signingConfigs.release' not in text:
+              text = text.replace(
+                  "        release {\n",
+                  "        release {\n            signingConfig signingConfigs.release\n",
+                  1,
+              )
+
+          p.write_text(text)
+          PY
+
+      - name: Build signed release APK
+        if: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
+        working-directory: android
+        run: ./gradlew assembleRelease
+
+      - name: Build debug APK fallback
+        if: ${{ secrets.ANDROID_KEYSTORE_BASE64 == '' }}
+        working-directory: android
+        run: ./gradlew assembleDebug
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-apk
+          path: |
+            android/app/build/outputs/apk/release/app-release.apk
+            android/app/build/outputs/apk/debug/app-debug.apk
